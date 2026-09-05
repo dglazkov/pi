@@ -1,5 +1,7 @@
 # Windows native prebuilds
 
+The native platform helper provides console input setup, modifier-key state, and text/image clipboard access.
+
 Build both Windows architectures from the repository root:
 
 ```sh
@@ -19,4 +21,15 @@ CC_ARM64=/path/to/aarch64-w64-mingw32-gcc \
 npm --prefix packages/tui run build:native:win32
 ```
 
-The addon intentionally avoids the C runtime and links only against `kernel32`.
+The addon intentionally avoids the C runtime and links only against `kernel32` and `user32`.
+
+## Testing clipboard writes
+
+On a Windows test desktop, run from `packages/tui` in PowerShell:
+
+```powershell
+$env:PI_TEST_NATIVE_CLIPBOARD = "1"
+node --test test/native-platform.test.ts
+```
+
+This opt-in test replaces the system clipboard contents. It verifies native text writes and reads directly, without command-line fallbacks.

@@ -5,7 +5,9 @@
  * This tests the fix for WSL2/WSLg where clipboard often provides image/bmp
  * instead of image/png.
  */
+import type * as ChildProcess from "child_process";
 import { describe, expect, test, vi } from "vitest";
+import { readClipboardImage } from "../src/utils/clipboard-image.ts";
 
 function createTinyBmp1x1Red24bpp(): Uint8Array {
 	// Minimal 1x1 24bpp BMP (BGR + row padding to 4 bytes)
@@ -43,7 +45,7 @@ function createTinyBmp1x1Red24bpp(): Uint8Array {
 
 // Mock wl-paste to return BMP
 vi.mock("child_process", async () => {
-	const actual = await vi.importActual<typeof import("child_process")>("child_process");
+	const actual = await vi.importActual<typeof ChildProcess>("child_process");
 	return {
 		...actual,
 		spawnSync: vi.fn((command: string, args: string[]) => {
@@ -58,31 +60,16 @@ vi.mock("child_process", async () => {
 	};
 });
 
-// Mock the native clipboard (not used in Wayland path, but needs to be mocked)
-vi.mock("@mariozechner/clipboard", () => ({
-	default: {
-		hasImage: vi.fn(() => false),
-		getImageBinary: vi.fn(() => Promise.resolve(null)),
-	},
+vi.mock("@earendil-works/pi-tui", () => ({
+	getNativeClipboard: () => ({ getImage: createTinyBmp1x1Red24bpp }),
 }));
 
 describe("readClipboardImage BMP conversion", () => {
-	test("converts BMP to PNG on Wayland/WSLg", async () => {
-		const { readClipboardImage } = await import("../src/utils/clipboard-image.ts");
-
-		// Simulate Wayland session (WSLg)
-		const image = await readClipboardImage({
-			env: { WAYLAND_DISPLAY: "wayland-0" },
-			platform: "linux",
-		});
+	test.each(["linux", "win32"] as const)("%s: converts command/native BMP to PNG", async (platform) => {
+		const image = await readClipboardImage({ env: { WAYLAND_DISPLAY: "wayland-0" }, platform });
 
 		expect(image).not.toBeNull();
 		expect(image!.mimeType).toBe("image/png");
-
-		// Verify PNG magic bytes
-		expect(image!.bytes[0]).toBe(0x89);
-		expect(image!.bytes[1]).toBe(0x50); // P
-		expect(image!.bytes[2]).toBe(0x4e); // N
-		expect(image!.bytes[3]).toBe(0x47); // G
+		expect(Array.from(image!.bytes.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
 	});
 });

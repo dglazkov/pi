@@ -1,10 +1,11 @@
+import { getNativeClipboard } from "@earendil-works/pi-tui";
 import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
 import { readFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { clipboard } from "./clipboard-native.ts";
+import { detectSupportedImageMimeType } from "./mime.ts";
 import { loadPhoton } from "./photon.ts";
 
 export type ClipboardImage = {
@@ -115,11 +116,11 @@ function runCommand(
 	return { ok: true, stdout };
 }
 
-function readClipboardImageViaWlPaste(): ClipboardImage | null {
+// Undefined means the backend failed; null means it has no image. An empty
+// Wayland clipboard must not fall through to stale X11 clipboard contents.
+function readClipboardImageViaWlPaste(): ClipboardImage | null | undefined {
 	const list = runCommand("wl-paste", ["--list-types"], { timeoutMs: DEFAULT_LIST_TIMEOUT_MS });
-	if (!list.ok) {
-		return null;
-	}
+	if (!list.ok) return undefined;
 
 	const types = list.stdout
 		.toString("utf-8")
@@ -133,9 +134,8 @@ function readClipboardImageViaWlPaste(): ClipboardImage | null {
 	}
 
 	const data = runCommand("wl-paste", ["--type", selectedType, "--no-newline"]);
-	if (!data.ok || data.stdout.length === 0) {
-		return null;
-	}
+	if (!data.ok) return undefined;
+	if (data.stdout.length === 0) return null;
 
 	return { bytes: data.stdout, mimeType: baseMimeType(selectedType) };
 }
@@ -210,7 +210,7 @@ function readClipboardImageViaPowerShell(): ClipboardImage | null {
 	}
 }
 
-function readClipboardImageViaXclip(): ClipboardImage | null {
+function readClipboardImageViaXclip(): ClipboardImage | null | undefined {
 	const targets = runCommand("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-o"], {
 		timeoutMs: DEFAULT_LIST_TIMEOUT_MS,
 	});
@@ -224,8 +224,9 @@ function readClipboardImageViaXclip(): ClipboardImage | null {
 			.filter(Boolean);
 	}
 
-	const preferred = candidateTypes.length > 0 ? selectPreferredImageMimeType(candidateTypes) : null;
-	const tryTypes = preferred ? [preferred, ...SUPPORTED_IMAGE_MIME_TYPES] : [...SUPPORTED_IMAGE_MIME_TYPES];
+	const preferred = selectPreferredImageMimeType(candidateTypes);
+	if (targets.ok && !preferred) return null;
+	const tryTypes = new Set(preferred ? [preferred, ...SUPPORTED_IMAGE_MIME_TYPES] : SUPPORTED_IMAGE_MIME_TYPES);
 
 	for (const mimeType of tryTypes) {
 		const data = runCommand("xclip", ["-selection", "clipboard", "-t", mimeType, "-o"]);
@@ -234,21 +235,14 @@ function readClipboardImageViaXclip(): ClipboardImage | null {
 		}
 	}
 
-	return null;
+	return undefined;
 }
 
-async function readClipboardImageViaNativeClipboard(): Promise<ClipboardImage | null> {
-	if (!clipboard || !clipboard.hasImage()) {
-		return null;
-	}
-
-	const imageData = await clipboard.getImageBinary();
-	if (!imageData || imageData.length === 0) {
-		return null;
-	}
-
-	const bytes = imageData instanceof Uint8Array ? imageData : Uint8Array.from(imageData);
-	return { bytes, mimeType: "image/png" };
+function readClipboardImageViaNativeClipboard(backend?: "wayland" | "x11"): ClipboardImage | null | undefined {
+	const bytes = getNativeClipboard(backend)?.getImage();
+	if (bytes === undefined) return undefined;
+	if (!bytes?.length) return null;
+	return { bytes, mimeType: detectSupportedImageMimeType(bytes) ?? "application/octet-stream" };
 }
 
 export async function readClipboardImage(options?: {
@@ -262,32 +256,28 @@ export async function readClipboardImage(options?: {
 		return null;
 	}
 
-	let image: ClipboardImage | null = null;
+	let image: ClipboardImage | null | undefined;
 
 	if (platform === "linux") {
 		const wsl = isWSL(env);
-		const wayland = isWaylandSession(env);
-
-		if (wayland || wsl) {
-			image = readClipboardImageViaWlPaste() ?? readClipboardImageViaXclip();
+		if (isWaylandSession(env) || wsl) {
+			image = readClipboardImageViaWlPaste();
+			if (image === undefined) image = readClipboardImageViaNativeClipboard("wayland");
 		}
-
-		if (!image && wsl) {
-			image = readClipboardImageViaPowerShell();
+		if (image === undefined) {
+			image = readClipboardImageViaXclip();
+			if (image === undefined) image = readClipboardImageViaNativeClipboard("x11");
 		}
-
-		if (!image && !wayland) {
-			image = (await readClipboardImageViaNativeClipboard()) ?? readClipboardImageViaXclip();
-		}
+		if (!image && wsl) image = readClipboardImageViaPowerShell();
 	} else {
-		image = await readClipboardImageViaNativeClipboard();
+		image = readClipboardImageViaNativeClipboard();
 	}
 
 	if (!image) {
 		return null;
 	}
 
-	// Convert unsupported formats (e.g., BMP from WSLg) to PNG
+	// Convert unsupported formats (e.g., Windows DIB data wrapped as BMP) to PNG
 	if (!isSupportedImageMimeType(image.mimeType)) {
 		const pngBytes = await convertToPng(image.bytes);
 		if (!pngBytes) {
