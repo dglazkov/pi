@@ -150,7 +150,8 @@ export class Server<TMetadata extends SessionMetadata = SessionMetadata> {
 				message: "Handshake timeout",
 			});
 		}, this.handshakeTimeoutMs);
-		handshakeTimeout.unref();
+		// Node timers unref; Workers-shaped runtimes return a number.
+		(handshakeTimeout as { unref?: () => void }).unref?.();
 		state = {
 			connection,
 			decoder: new ClientMessageDecoder({ maxFrameLength: this.maxFrameLength }),

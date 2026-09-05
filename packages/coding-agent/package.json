@@ -24,6 +24,10 @@
 		},
 		"./experimental/plugin": {
 			"source": "./src/experimental/plugin.ts"
+		},
+		"./experimental/*": {
+			"types": "./src/experimental/*.ts",
+			"import": "./src/experimental/*.ts"
 		}
 	},
 	"files": [
