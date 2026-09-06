@@ -5,7 +5,12 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
+import { formatSkillsForPrompt, type Skill, type SkillFrontmatter } from "./skills-prompt.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+
+// The prompt formatter and the `Skill` it lists live in the leaf `skills-prompt.ts`; this module is their home for every importer.
+export { formatSkillsForPrompt };
+export type { Skill, SkillFrontmatter };
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -62,22 +67,6 @@ function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
 			}
 		} catch {}
 	}
-}
-
-export interface SkillFrontmatter {
-	name?: string;
-	description?: string;
-	"disable-model-invocation"?: boolean;
-	[key: string]: unknown;
-}
-
-export interface Skill {
-	name: string;
-	description: string;
-	filePath: string;
-	baseDir: string;
-	sourceInfo: SourceInfo;
-	disableModelInvocation: boolean;
 }
 
 export interface LoadSkillsResult {
@@ -342,53 +331,6 @@ function loadSkillFromFile(
 		},
 		diagnostics,
 	};
-}
-
-/**
- * Format skills for inclusion in a system prompt.
- * Uses XML format per Agent Skills standard.
- * See: https://agentskills.io/integrate-skills
- *
- * Skills with disableModelInvocation=true are excluded from the prompt
- * (they can only be invoked explicitly via /skill:name commands).
- */
-export function formatSkillsForPrompt(skills: Skill[], fileReadTool: "read" | "bash" = "read"): string {
-	const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-
-	if (visibleSkills.length === 0) {
-		return "";
-	}
-
-	const lines = [
-		"\n\nThe following skills provide specialized instructions for specific tasks.",
-		fileReadTool === "read"
-			? "Use the read tool to load a skill's file when the task matches its description."
-			: "Use bash to load a skill's file when the task matches its description.",
-		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
-		"",
-		"<available_skills>",
-	];
-
-	for (const skill of visibleSkills) {
-		lines.push("  <skill>");
-		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
-		lines.push(`    <description>${escapeXml(skill.description)}</description>`);
-		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
-		lines.push("  </skill>");
-	}
-
-	lines.push("</available_skills>");
-
-	return lines.join("\n");
-}
-
-function escapeXml(str: string): string {
-	return str
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&apos;");
 }
 
 export interface LoadSkillsOptions {
